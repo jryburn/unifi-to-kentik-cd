@@ -83,15 +83,16 @@ def push_to_kentik():
     with open(csvfile, mode='r', encoding='utf-8-sig') as csv_file:
         csv_reader = csv.DictReader(csv_file)
         for row in csv_reader:
-            tag_name = row[populator_name]
+            populator = row[populator_name]
             mac = row[populator_data]
-            tags[tag_name].append(mac)
-
+            tags[populator].append(mac)
+    # print(tags)
     # Now iterate through the tags and add them to the batch. We're creating
     # two batches (for src and dst) so we need two criteria, addresses and populators)
     print("Building batch for upload...")
     for item in tags.items():
         populator = item[0]
+        mac = item[1][0]
         print("Adding populator %s with a mac address value of %s" % (populator, mac))
         crit_dst = tagging.Criteria("dst")
         crit_src = tagging.Criteria("src")
@@ -104,7 +105,7 @@ def push_to_kentik():
     # Showtime! Submit the batch as populators for the configured custom dimension
     # - library will take care of chunking the requests into smaller HTTP payloads
     # -----
-    print("Submitting %s batch now...")
+    print("Submitting batch now...")
     client = tagging.Client(option_api_email, option_api_token)
     guid_dst = client.submit_populator_batch(dst_custom_dimension, batch_dst)
     guid_src = client.submit_populator_batch(src_custom_dimension, batch_src)
