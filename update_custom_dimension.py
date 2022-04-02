@@ -1,26 +1,53 @@
 #!/usr/bin/env python
+#
+#   update_custom_dimension.py  written by Justin Ryburn (jryburn@kentik.com) 2022 Apr 1
+#
+#   This simple python script grabs a client list from a Ubiquiti Unifi controller and saves them to a .csv file.
+#  It then uses the Kentik bulk API to quickly load custom dimension populator data.
+#
+#   This script uses the Kentik bulk API written by Blake Caldwell which can be located at:
+#   https://github.com/kentik/kentikapi-py/tree/master/kentikapi/v5
 
 from unificontrol import UnifiClient
-import ssl
 from kentikapi.v5 import tagging
+from decouple import config
+from collections import defaultdict
 import csv
 import time
-from decouple import config
+import ssl
 
-UNIFI_USER = config('UNIFI_USER', default='')
-UNIFI_PASSWORD = config('UNIFI_PASSWORD', default='')
+################################
+# This section are the user editable variables the script relies upon
+# secrets are stored in the .env file in the same directory as the script.
+# The config function pulls these in to the script.
+UNIFI_USER = config('UNIFI_USER')
+UNIFI_PASSWORD = config('UNIFI_PASSWORD')
 UNIFI_SITE = 'default'
 UNIFI_HOST = 'net-tools.ryburn.org'
 cert = ssl.get_server_certificate((UNIFI_HOST, 8443))
+# Name of the CSV file we are going to store the client list in
 csvfile = 'clients.csv'
 
-# ---------------------------------------------------
+################################
 # Kentik options:
-option_api_email = config('KENTIK_API_EMAIL', default='')
-option_api_token = config('KENTIK_API_TOKEN', default='')
+option_api_email = config('KENTIK_API_EMAIL')
+option_api_token = config('KENTIK_API_TOKEN')
+#
+# "populator_name" and "populator_data" should be the column headers for the CSV file.
+#
+populator_name = "hostname"
+populator_data = "mac_addr"
+# This script automatically creates both the source and destination populators for a given custom dimension.
+# In the Kentik portal, you need to create two custom dimensions. The database fields must be in the format of
+# "c_dst_dimension" and "c_src_dimension". The script will add the populators and MAC address to both the source
+# and destination dimensions.
 src_custom_dimension = 'c_src_dyn_hostname'
 dst_custom_dimension = 'c_dst_dyn_hostname'
-# ---------------------------------------------------
+#
+#  End of user variables
+################################
+
+tags = defaultdict(list)
 
 
 def pull_clients():
@@ -44,48 +71,56 @@ def pull_clients():
     outfile.close()
 
 
-def push_to_kentik(direction):
-    # -----
+def push_to_kentik():
     # initialize a batch that will replace all populators
-    # -----
-    batch = tagging.Batch(True)
-    crit = tagging.Criteria(direction)  # 'src', 'dst', or 'either'
-    # Determine direction so we can set the CD name
-    if direction == 'src':
-        print("Building batch for src direction...")
-        option_custom_dimension = src_custom_dimension
-    elif direction == 'dst':
-        print("Building batch for dst direction...")
-        option_custom_dimension = dst_custom_dimension
+    batch_src = tagging.Batch(True)
+    batch_dst = tagging.Batch(True)
 
-    infile = open(csvfile, "r")
-    csvreader = csv.reader(infile)
+    # Use the CSV reader library to read in the CSV file and send the data to the batch API
+    # The column headings should be labeled mac_addr and hostname
 
-    # Read in the headers
-    header = csvreader.__next__()
-    macindex = header.index("mac_addr")
-    nameindex = header.index("hostname")
+    print("Reading CSV file...")
+    with open(csvfile, mode='r', encoding='utf-8-sig') as csv_file:
+        csv_reader = csv.DictReader(csv_file)
+        for row in csv_reader:
+            tag_name = row[populator_name]
+            mac = row[populator_data]
+            tags[tag_name].append(mac)
 
-    # Go line by line through the file and create criteria for all the data
-    for row in csvreader:
-        tag_name = row[nameindex]
-        mac = row[macindex]
-        print("Adding tag_name %s with a mac address value of %s" % (tag_name, mac))
-        crit.add_mac_address(mac)
-
-        batch.add_upsert(tag_name, crit)
+    # Now iterate through the tags and add them to the batch. We're creating
+    # two batches (for src and dst) so we need two criteria, addresses and populators)
+    print("Building batch for upload...")
+    for item in tags.items():
+        populator = item[0]
+        print("Adding populator %s with a mac address value of %s" % (populator, mac))
+        crit_dst = tagging.Criteria("dst")
+        crit_src = tagging.Criteria("src")
+        crit_dst.add_mac_address(mac)
+        crit_src.add_mac_address(mac)
+        batch_dst.add_upsert(populator, crit_dst)
+        batch_src.add_upsert(populator, crit_src)
 
     # -----
     # Showtime! Submit the batch as populators for the configured custom dimension
     # - library will take care of chunking the requests into smaller HTTP payloads
     # -----
-    print("Submitting %s batch now..." % direction)
+    print("Submitting %s batch now...")
     client = tagging.Client(option_api_email, option_api_token)
-    guid = client.submit_populator_batch(option_custom_dimension, batch)
+    guid_dst = client.submit_populator_batch(dst_custom_dimension, batch_dst)
+    guid_src = client.submit_populator_batch(src_custom_dimension, batch_src)
 
-    for x in range(1, 100):
+    #  Wait and display the results
+    for x in range(1, 12):
         time.sleep(5)
-        status = client.fetch_batch_status(guid)
+        status = client.fetch_batch_status(guid_dst)
+        if status.is_finished():
+            print(status.pretty_response())
+            break
+
+    #  Wait and display the results
+    for x in range(1, 12):
+        time.sleep(5)
+        status = client.fetch_batch_status(guid_src)
         if status.is_finished():
             print(status.pretty_response())
             break
@@ -93,5 +128,4 @@ def push_to_kentik(direction):
 
 if __name__ == "__main__":
     pull_clients()
-    push_to_kentik('src')
-    push_to_kentik('dst')
+    push_to_kentik()
