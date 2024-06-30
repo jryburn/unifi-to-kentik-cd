@@ -23,7 +23,7 @@ import ssl
 UNIFI_USER = config('UNIFI_USER')
 UNIFI_PASSWORD = config('UNIFI_PASSWORD')
 UNIFI_SITE = 'default'
-UNIFI_HOST = 'net-tools.ryburn.org'
+UNIFI_HOST = 'docklands.ryburn.org'
 cert = ssl.get_server_certificate((UNIFI_HOST, 8443))
 # Name of the CSV file we are going to store the client list in
 csvfile = 'clients.csv'
@@ -52,7 +52,14 @@ tags = defaultdict(list)
 
 def pull_clients():
     print("Grabbing client list from controller...")
-    client = UnifiClient(host=UNIFI_HOST, port=8443, username=UNIFI_USER, password=UNIFI_PASSWORD, site=UNIFI_SITE)
+    client = UnifiClient(
+        host=UNIFI_HOST,
+        port=8443,
+        username=UNIFI_USER,
+        password=UNIFI_PASSWORD,
+        site=UNIFI_SITE,
+        cert=cert
+        )
     client_list = client.list_clients()
 
     print("Writing client list to a file...")
